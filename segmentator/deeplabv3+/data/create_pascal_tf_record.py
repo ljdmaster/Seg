@@ -8,7 +8,8 @@ import argparse
 import io
 import os
 import sys
-import PIL.Image
+import PIL
+from PIL import Image
 import tensorflow as tf
 sys.path.append("../")
 from utils import dataset_util

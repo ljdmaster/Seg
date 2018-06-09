@@ -1,1 +1,1 @@
-python labelme2voc.py labels.txt data_annotated data_dataset_voc
+python labelme2voc.py ./temp/labels.txt ./temp/data_annotated ./temp/data_dataset_voc

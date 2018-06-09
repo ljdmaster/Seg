@@ -7,108 +7,135 @@ from __future__ import print_function
 import argparse
 import os
 import sys
-
-
-import deeplab_model
-from utils import preprocessing
-from utils import dataset_util
-
-import tensorflow as tf
+import numpy as np
+import PIL
 from PIL import Image
 import matplotlib.pyplot as plt
+
+import tensorflow as tf
 from tensorflow.python import debug as tf_debug
+from tensorflow.python import pywrap_tensorflow
+from tensorflow.contrib import slim
+from tensorflow.contrib.slim.nets import resnet_v2
+
+import deeplab_model
+from deeplab_model import deeplab_v3_plus_generator
+from utils import preprocessing
+from utils import dataset_util
+import cv2
 
 
-
-parser = argparse.ArgumentParser()
-parser.add_argument('--data_dir', type=str, default='dataset/VOCdevkit/VOC2012/JPEGImages',
-                    help='The directory containing the image data.')
-
-parser.add_argument('--output_dir', type=str, default='./dataset/inference_output',
-                    help='Path to the directory to generate the inference results')
-
-parser.add_argument('--infer_data_list', type=str, default='./dataset/sample_images_list.txt',
-                    help='Path to the file listing the inferring images.')
-
-parser.add_argument('--model_dir', type=str, default='./model',
-                    help="Base directory for the model. "
-                         "Make sure 'model_checkpoint_path' given in 'checkpoint' file matches "
-                         "with checkpoint name.")
-
-parser.add_argument('--base_architecture', type=str, default='resnet_v2_101',
-                    choices=['resnet_v2_50', 'resnet_v2_101'],
-                    help='The architecture of base Resnet building block.')
-
-parser.add_argument('--output_stride', type=int, default=16,
-                    choices=[8, 16],
-                    help='Output stride for DeepLab v3. Currently 8 or 16 is supported.')
-
-parser.add_argument('--debug', action='store_true',
-                    help='Whether to use debugger to track down bad values during training.')
-
-_NUM_CLASSES = 21
-
-
-
-
-
-def main(unused_argv):
-  # Using the Winograd non-fused algorithms provides a small performance boost.
-  os.environ['TF_ENABLE_WINOGRAD_NONFUSED'] = '1'
-  pred_hooks = None
-
-  if FLAGS.debug:
-    debug_hook = tf_debug.LocalCLIDebugHook()
-    pred_hooks = [debug_hook]
-  
+def batch_predict(**params):
   # Model
   model = tf.estimator.Estimator(
       model_fn=deeplab_model.deeplabv3_plus_model_fn,
-      model_dir=FLAGS.model_dir,
+      model_dir=params["model_dir"],
       params={
-          'output_stride': FLAGS.output_stride,
+          'output_stride': params["output_stride"],
           'batch_size': 1,  # Batch size must be 1 because the images' size may differ
-          'base_architecture': FLAGS.base_architecture,
+          'base_architecture': params["base_architecture"],
           'pre_trained_model': None,
           'batch_norm_decay': None,
-          'num_classes': _NUM_CLASSES,
+          'num_classes': params["num_classes"]
       })
-  
+   
   # Example
-  examples = dataset_util.read_examples_list(FLAGS.infer_data_list)
-  image_files = [os.path.join(FLAGS.data_dir, filename) for filename in examples]
-
+  image_names = os.listdir(params["data_dir"])
+  image_files = [os.path.join(params["data_dir"], image_name) for image_name in image_names]
+  
   # Predict
   predictions = model.predict(
         input_fn=lambda: preprocessing.eval_input_fn(image_files),
-        hooks=pred_hooks)
+        hooks=None)
   
   # Output
-  output_dir = FLAGS.output_dir
+  output_dir = params["output_dir"]
   if not os.path.exists(output_dir):
     os.makedirs(output_dir)
-
-  for pred_dict, image_path in zip(predictions, image_files):
-    image_basename = os.path.splitext(os.path.basename(image_path))[0]
-    output_filename = image_basename + '_mask.png'
-    path_to_output = os.path.join(output_dir, output_filename)
-
-    print("generating:", path_to_output)
-    mask = pred_dict['decoded_labels']
-    mask = Image.fromarray(mask)
-    plt.axis('off')
-    plt.imshow(mask)
-    plt.savefig(path_to_output, bbox_inches='tight')
-
-
-
-
-if __name__ == '__main__':
-  tf.logging.set_verbosity(tf.logging.INFO)
-  FLAGS, unparsed = parser.parse_known_args()
-  tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)
+  
+  for pred, image_file in zip(predictions, image_files):
+    label = pred['classes'][:,:,0]
+    
+    # Show Label
+    print("{} label shape:{} , type: {}".format(image_file, label.shape, label.dtype)) 
+    cv2.imshow("label", np.uint8(label*30))
+    cv2.waitKey(1000) 
 
 
 
 
 
+class Inference(object):
+  def __init__(self, height, width, **params ):
+    self.model_dir = params["model_dir"]
+    self.height = height
+    self.width = width
+    self.params = params
+    self.build() 
+    self.init()  
+
+  def build(self):
+    ## model
+    self.Y = tf.placeholder(tf.int32, [None, self.height, self.width,1])
+    self.X = tf.placeholder(tf.float32, [None, self.height, self.width, 3])
+    self.net = deeplab_v3_plus_generator(self.params["num_classes"],
+                                         self.params["output_stride"],
+                                         self.params["base_architecture"],
+                                         self.params["pre_trained_model"],
+                                         self.params["batch_norm_decay"])
+    self.logits = self.net(self.X, False)
+    self.pred_classes = tf.expand_dims(tf.argmax(self.logits, axis=3, output_type=tf.int32), axis=3)
+  
+  def init(self):
+    ## initialize
+    self.sess = tf.Session()
+    init = tf.global_variables_initializer()
+    self.sess.run(init)
+    self.saver = tf.train.Saver()
+    self.saver.restore(self.sess, tf.train.latest_checkpoint(self.model_dir))
+    
+  def predict(self, image_files): 
+    """ image file list """ 
+    labels = []
+    # Read Image
+    for i in range(len(image_files)):
+      images,_ = preprocessing.eval_input_fn([image_files[i]])  
+      images_ = self.sess.run(images)
+      pred_classes_ = self.sess.run(self.pred_classes, feed_dict={self.X:images_})
+      
+      label = pred_classes_[0,:,:,0]
+      labels.append(label)
+      print("{} label shape:{} , type: {}".format(image_files[i], label.shape, label.dtype)) 
+       
+      # Show result
+      decode_labels = preprocessing.decode_labels(pred_classes_, 1, params['num_classes'])
+      #cv2.imshow("label", np.uint8(label*30))
+      cv2.imshow("decode_label", decode_labels[0])
+      cv2.waitKey(1000)
+
+    return labels 
+
+
+if __name__=="__main__":
+  ## hyperparameter
+  params = {"output_stride":16,
+            "batch_size":1,
+            "base_architecture":"resnet_v2_101",
+            "pre_trained_model": None,
+            "batch_norm_decay": None,
+            "num_classes": 7,   #!!
+            "model_dir": "./model/train",
+            "data_dir": "./data/temp/data_dataset_voc/JPEGImages",
+            "output_dir": "./data/temp/output"
+           }
+
+  #batch_predict(**params)
+    
+  height= None
+  width = None
+  infer = Inference(height, width, **params)
+  image_names = os.listdir(params['data_dir']) 
+  image_files = [os.path.join(params['data_dir'], image_name) for image_name in image_names]
+  infer.predict(image_files)
+
+    

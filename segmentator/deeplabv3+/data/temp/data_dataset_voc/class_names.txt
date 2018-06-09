@@ -1,0 +1,7 @@
+_background_
+bottle
+bus
+car
+chair
+person
+sofa

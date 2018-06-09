@@ -8,6 +8,7 @@ import argparse
 import os
 import sys
 import shutil
+from PIL import Image
 
 import tensorflow as tf
 from tensorflow.python import debug as tf_debug
@@ -81,23 +82,29 @@ parser.add_argument('--weight_decay', type=float, default=2e-4,
 parser.add_argument('--debug', action='store_true',
                     help='Whether to use debugger to track down bad values during training.')
 
-_NUM_CLASSES = 21
+parser.add_argument('--gpu', action='store_true', default=False, 
+                    help='Whether to use GPU')
+
+
+
+_NUM_IMAGES = {
+    'train': 3,      #!
+    'validation': 3, #!
+}
+_NUM_CLASSES = 7     #!
 _HEIGHT = 513
 _WIDTH = 513
 _DEPTH = 3
 _MIN_SCALE = 0.5
 _MAX_SCALE = 2.0
-_IGNORE_LABEL = 0
+_IGNORE_LABEL = 0  ##!!
 
 _POWER = 0.9
 _MOMENTUM = 0.9
 
-_BATCH_NORM_DECAY = 0.9997
+#_BATCH_NORM_DECAY = 0.9997
+_BATCH_NORM_DECAY = 0.3  #!!!! very important
 
-_NUM_IMAGES = {
-    'train': 3,
-    'validation': 3,
-}
 
 
 def get_filenames(is_training, data_dir):
@@ -217,16 +224,17 @@ def main(unused_argv):
 
   if FLAGS.clean_model_dir:
     shutil.rmtree(FLAGS.model_dir, ignore_errors=True)
-
-  os.environ['CUDA_VISIBLE_DEVICES'] = '0'
-  session_config = tf.ConfigProto(log_device_placement=False)  
-  session_config.gpu_options.per_process_gpu_memory_fraction = 0.9
-  run_config = tf.estimator.RunConfig().replace(session_config=session_config)  
-
-  # Set up a RunConfig to only save checkpoints once per training cycle.
-  run_config = tf.estimator.RunConfig().replace(save_checkpoints_secs=1e9,
-                                                session_config = session_config,
-                                                keep_checkpoint_max=2)
+  
+  if FLAGS.gpu:
+    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+    session_config = tf.ConfigProto(log_device_placement=False)  
+    session_config.gpu_options.per_process_gpu_memory_fraction = 0.9
+    run_config = tf.estimator.RunConfig().replace(session_config=session_config,
+                                                  save_checkpoints_secs=1e9,
+                                                  keep_checkpoint_max=2)  
+  else:
+    run_config = tf.estimator.RunConfig().replace(save_checkpoints_secs=1e9,
+                                                  keep_checkpoint_max=2)
   model = tf.estimator.Estimator(
       model_fn=deeplab_model.deeplabv3_plus_model_fn,
       model_dir=FLAGS.model_dir,
@@ -275,7 +283,7 @@ def main(unused_argv):
         hooks=train_hooks,
         # steps=1  # For debug
     )
-
+    
     tf.logging.info("Start evaluation.")
     # Evaluate the model and print results
     eval_results = model.evaluate(
@@ -291,3 +299,12 @@ if __name__ == '__main__':
   tf.logging.set_verbosity(tf.logging.INFO)
   FLAGS, unparsed = parser.parse_known_args()
   tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)
+  
+  '''
+  images, labels = input_fn(False, './data/dataset', 1)
+  sess = tf.Session()
+  labels_ = sess.run(labels)
+  print(labels_.shape)
+  label = Image.fromarray(labels_[0,:,:,0]*20)
+  label.show()
+  '''

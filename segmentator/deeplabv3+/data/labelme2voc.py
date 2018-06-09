@@ -78,7 +78,7 @@ def main():
             )
 
             
-            lbl_pil = PIL.Image.fromarray(np.uint8(lbl))
+            lbl_pil = PIL.Image.fromarray(np.uint8(lbl))  ##uint8
             # Only works with uint8 label
             # lbl_pil = PIL.Image.fromarray(lbl, mode='P')
             # lbl_pil.putpalette((colormap * 255).flatten())

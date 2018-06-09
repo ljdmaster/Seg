@@ -122,12 +122,13 @@ def deeplab_v3_plus_generator(num_classes,
                                       is_training=is_training,
                                       global_pool=False,
                                       output_stride=output_stride)
-
+    
     if is_training:
       exclude = [base_architecture + '/logits', 'global_step']
       variables_to_restore = tf.contrib.slim.get_variables_to_restore(exclude=exclude)
       tf.train.init_from_checkpoint(pre_trained_model,
                                     {v.name.split(':')[0]: v for v in variables_to_restore})
+    
 
     inputs_size = tf.shape(inputs)[1:3]
     net = end_points[base_architecture + '/block4']
@@ -169,6 +170,7 @@ def deeplabv3_plus_model_fn(features, labels, mode, params):
                                       params['batch_norm_decay'])
 
   logits = network(features, mode == tf.estimator.ModeKeys.TRAIN)
+
   pred_classes = tf.expand_dims(tf.argmax(logits, axis=3, output_type=tf.int32), axis=3)
   pred_decoded_labels = tf.py_func(preprocessing.decode_labels,
                                    [pred_classes, params['batch_size'], params['num_classes']],
